@@ -2,7 +2,7 @@ import re
 import tweepy
 from tweepy import OAuthHandler
 from textblob import TextBlob
-
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 class TwitterClient(object):
 
@@ -74,6 +74,20 @@ class TwitterClient(object):
             # print error (if any)
             print("Error : " + str(e))
 
+    def sentiment_score(self, tweet):
+        sid_obj = SentimentIntensityAnalyzer()
+
+        sentiment_dict = sid_obj.polarity_scores(self.clean_tweet(tweet))
+
+        if sentiment_dict['compound'] >= 0.05:
+            return ("Positive")
+
+        elif sentiment_dict['compound'] <= - 0.05:
+            return ("Negative")
+
+        else:
+            return ("Neutral")
+
     def textblob_sentiment(self, tweet):
 
         analysis = TextBlob(self.clean_tweet(tweet))
@@ -87,6 +101,55 @@ class TwitterClient(object):
         else:
             print('negative')
 
+    def get_vader_tweets(self, query, count=10):
+
+        tweets = []
+
+        try:
+
+            fetched_tweets = self.api.search(q=query, count=count)
+
+            for tweet in fetched_tweets:
+
+                parsed_tweet_1 = {}
+
+                parsed_tweet_1['text'] = tweet.text
+
+                parsed_tweet_1['sentiment'] = self.sentiment_score(tweet.text)
+
+                if tweet.retweet_count > 0:
+
+                    if parsed_tweet_1 not in tweets:
+                        tweets.append(parsed_tweet_1)
+
+                else:
+                    tweets.append(parsed_tweet_1)
+
+            return tweets
+
+        except tweepy.TweepError as e:
+            print("Error : " + str(e))
+
+    def vader_analysis(self, tweet):
+        sid_obj = SentimentIntensityAnalyzer()
+
+        sentiment_dict = sid_obj.polarity_scores(self.clean_tweet(tweet))
+
+        print("Overall sentiment dictionary is : ", sentiment_dict)
+        print("sentence was rated as ", sentiment_dict['neg'] * 100, "% Negative")
+        print("sentence was rated as ", sentiment_dict['neu'] * 100, "% Neutral")
+        print("sentence was rated as ", sentiment_dict['pos'] * 100, "% Positive")
+
+        print("Sentence Overall Rated As", end=" ")
+
+        if sentiment_dict['compound'] >= 0.05:
+            print("Positive \n")
+
+        elif sentiment_dict['compound'] <= - 0.05:
+            print("Negative \n")
+
+        else:
+            print("Neutral \n")
 
 def main():
     # creating object of TwitterClient Class
@@ -118,6 +181,32 @@ def main():
     print("\n\nNegative tweets:")
     for tweet in ntweets[:2]:
         print(tweet['text'])
+
+    print("----------------------------------------------------------------------------------------------------------")
+    print("                                    Vader sentiment analysis                                              ")
+    print("----------------------------------------------------------------------------------------------------------")
+    tweets_vader = api.get_vader_tweets(query=que, count=10)
+
+    ptweets_vader = [tweet for tweet in tweets_vader if tweet['sentiment'] == 'Positive']
+
+    print("Positive tweets percentage: {} %".format(100 * len(ptweets_vader) / len(tweets_vader)))
+
+    ntweets_vader = [tweet for tweet in tweets_vader if tweet['sentiment'] == 'Negative']
+
+    print("Negative tweets percentage: {} %".format(100 * len(ntweets_vader) / len(tweets_vader)))
+
+    print("Neutral tweets percentage: {} % ".format(
+        100 * (len(tweets_vader) - (len(ntweets_vader) + len(ptweets_vader))) / len(tweets_vader)))
+
+    print("\n\nVader Positive tweets:")
+    for tweet in ptweets_vader[:2]:
+        print(tweet['text'])
+
+    # printing first 5 negative tweets
+    print("\n\nVader Negative tweets:")
+    for tweet in ntweets_vader[:2]:
+        print(tweet['text'])
+
     print("----------------------------------------------------------------------------------------------------------")
     print("                                Textblob sentiment analysis showcase                                      ")
     print("----------------------------------------------------------------------------------------------------------")
@@ -138,6 +227,24 @@ def main():
     except:
         print("no negative tweets according to Textblob \n")
 
+    print("----------------------------------------------------------------------------------------------------------")
+    print("                                Vader sentiment analysis showcase                                         ")
+    print("----------------------------------------------------------------------------------------------------------")
+
+    try:
+        print(str(ptweets_vader[0]))
+        print("\n")
+        api.vader_analysis(str(ptweets_vader[0]))
+
+    except:
+        print("no positive tweets according to Vader \n ")
+
+    try:
+        print(str(ntweets_vader[0]))
+        print("\n")
+        api.vader_analysis(str(ntweets_vader[0]))
+    except:
+        print("no negative tweets according to Vader \n")
 
 if __name__ == "__main__":
     # calling main function
