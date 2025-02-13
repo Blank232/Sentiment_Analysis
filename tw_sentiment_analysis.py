@@ -1,251 +1,161 @@
-import re
-import tweepy
-from tweepy import OAuthHandler
+import requests
 from textblob import TextBlob
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.preprocessing import LabelEncoder
+import time
 
-class TwitterClient(object):
 
-    def __init__(self):
+class TwitterClient:
+    def __init__(self, bearer_token):
+        self.bearer_token = bearer_token
+        self.base_url = "https://api.twitter.com/2"
 
-        consumer_key = ''
-        consumer_secret = ''
-        access_token = ''
-        access_token_secret = ''
+        # Initialize RoBERTa model for sentiment analysis
+        self.tokenizer = AutoTokenizer.from_pretrained("cardiffnlp/twitter-roberta-base-sentiment")
+        self.model = AutoModelForSequenceClassification.from_pretrained("cardiffnlp/twitter-roberta-base-sentiment")
+        self.labels = ["negative", "neutral", "positive"]
 
-        try:
+    def create_headers(self):
+        """Create headers for the API request using the Bearer Token."""
+        return {"Authorization": f"Bearer {self.bearer_token}"}
 
-            self.auth = OAuthHandler(consumer_key, consumer_secret)
+    def search_recent_tweets(self, query, max_results=10):
+        
+        search_url = f"{self.base_url}/tweets/search/recent"
+        headers = self.create_headers()
+        params = {
+            "query": query,
+            "max_results": max_results,
+            "tweet.fields": "text",
+        }
 
-            self.auth.set_access_token(access_token, access_token_secret)
+        retry_attempts = 3  # Number of retries for rate limiting
+        for attempt in range(retry_attempts):
+            response = requests.get(search_url, headers=headers, params=params)
 
-            self.api = tweepy.API(self.auth)
-        except:
-            print("Error: Authentication Failed")
-
-    def clean_tweet(self, tweet):
-
-        return ' '.join(re.sub("(@[A-Za-z0-9]+)|([^0-9A-Za-z \t]) | (\w+:\/\/\S+)", " ", tweet).split())
-
-    def get_tweet_sentiment(self, tweet):
-
-        # create TextBlob object of passed tweet text
-        analysis = TextBlob(self.clean_tweet(tweet))
-        # set sentiment
-        if analysis.sentiment.polarity > 0:
-            return 'positive'
-        elif analysis.sentiment.polarity == 0:
-            return 'neutral'
-        else:
-            return 'negative'
-
-    def get_tweets(self, query, count=10):
-
-        # empty list to store parsed tweets
-        tweets = []
-
-        try:
-            # call twitter api to fetch tweets
-            fetched_tweets = self.api.search(q=query, count=count)
-
-            # parsing tweets one by one
-            for tweet in fetched_tweets:
-                # empty dictionary to store required params of a tweet
-                parsed_tweet = {}
-
-                # saving text of tweet
-                parsed_tweet['text'] = tweet.text
-                # saving sentiment of tweet
-                parsed_tweet['sentiment'] = self.get_tweet_sentiment(tweet.text)
-
-                # appending parsed tweet to tweets list
-                if tweet.retweet_count > 0:
-                    # if tweet has retweets, ensure that it is appended only once
-                    if parsed_tweet not in tweets:
-                        tweets.append(parsed_tweet)
-
+            if response.status_code == 200:
+                tweets = response.json().get("data", [])
+                return [tweet["text"] for tweet in tweets]
+            elif response.status_code == 429:
+                # Rate limit reached; wait and retry
+                reset_time = response.headers.get("x-rate-limit-reset")
+                if reset_time:
+                    wait_time = max(0, int(reset_time) - int(time.time()))
                 else:
-                    tweets.append(parsed_tweet)
+                    wait_time = 15  # Default wait time if header not available
+                print(f"Rate limit hit. Retrying in {wait_time} seconds... (Attempt {attempt + 1}/{retry_attempts})")
+                time.sleep(wait_time)
+            else:
+                print(f"Error: {response.status_code} - {response.text}")
+                break
 
-            # return parsed tweets
-            return tweets
-
-        except tweepy.TweepError as e:
-            # print error (if any)
-            print("Error : " + str(e))
-
-    def sentiment_score(self, tweet):
-        sid_obj = SentimentIntensityAnalyzer()
-
-        sentiment_dict = sid_obj.polarity_scores(self.clean_tweet(tweet))
-
-        if sentiment_dict['compound'] >= 0.05:
-            return ("Positive")
-
-        elif sentiment_dict['compound'] <= - 0.05:
-            return ("Negative")
-
-        else:
-            return ("Neutral")
+        return []
 
     def textblob_sentiment(self, tweet):
-
-        analysis = TextBlob(self.clean_tweet(tweet))
-        print("Polarity of the tweet: ", analysis.sentiment.polarity)
-        print("subjectivity of the tweet: ", analysis.sentiment.subjectivity)
-        print(" Tweet rated by Textblob as:", end=" ")
+        """Perform sentiment analysis using TextBlob."""
+        analysis = TextBlob(tweet)
         if analysis.sentiment.polarity > 0:
-            print('positive')
+            return "positive"
         elif analysis.sentiment.polarity == 0:
-            print('neutral')
+            return "neutral"
         else:
-            print('negative')
+            return "negative"
 
-    def get_vader_tweets(self, query, count=10):
-
-        tweets = []
-
-        try:
-
-            fetched_tweets = self.api.search(q=query, count=count)
-
-            for tweet in fetched_tweets:
-
-                parsed_tweet_1 = {}
-
-                parsed_tweet_1['text'] = tweet.text
-
-                parsed_tweet_1['sentiment'] = self.sentiment_score(tweet.text)
-
-                if tweet.retweet_count > 0:
-
-                    if parsed_tweet_1 not in tweets:
-                        tweets.append(parsed_tweet_1)
-
-                else:
-                    tweets.append(parsed_tweet_1)
-
-            return tweets
-
-        except tweepy.TweepError as e:
-            print("Error : " + str(e))
-
-    def vader_analysis(self, tweet):
-        sid_obj = SentimentIntensityAnalyzer()
-
-        sentiment_dict = sid_obj.polarity_scores(self.clean_tweet(tweet))
-
-        print("Overall sentiment dictionary is : ", sentiment_dict)
-        print("sentence was rated as ", sentiment_dict['neg'] * 100, "% Negative")
-        print("sentence was rated as ", sentiment_dict['neu'] * 100, "% Neutral")
-        print("sentence was rated as ", sentiment_dict['pos'] * 100, "% Positive")
-
-        print("Sentence Overall Rated As", end=" ")
-
-        if sentiment_dict['compound'] >= 0.05:
-            print("Positive \n")
-
-        elif sentiment_dict['compound'] <= - 0.05:
-            print("Negative \n")
-
+    def vader_sentiment(self, tweet):
+        """Perform sentiment analysis using VADER."""
+        analyzer = SentimentIntensityAnalyzer()
+        scores = analyzer.polarity_scores(tweet)
+        if scores['compound'] >= 0.05:
+            return "positive"
+        elif scores['compound'] <= -0.05:
+            return "negative"
         else:
-            print("Neutral \n")
+            return "neutral"
+
+    def roberta_sentiment(self, tweet):
+        """Perform sentiment analysis using RoBERTa."""
+        tokens = self.tokenizer(tweet, return_tensors="pt", truncation=True, padding=True, max_length=512)
+        outputs = self.model(**tokens)
+        probabilities = torch.nn.functional.softmax(outputs.logits, dim=-1)
+        sentiment = self.labels[torch.argmax(probabilities).item()]
+        return sentiment
+
+
+def calculate_metrics(y_true, y_pred, model_name):
+    """Calculate and display metrics for a model."""
+    accuracy = accuracy_score(y_true, y_pred)
+    precision = precision_score(y_true, y_pred, average="weighted")
+    recall = recall_score(y_true, y_pred, average="weighted")
+    f1 = f1_score(y_true, y_pred, average="weighted")
+
+    print(f"\n{model_name} Metrics:")
+    print(f"  Accuracy: {accuracy:.2f}")
+    print(f"  Precision: {precision:.2f}")
+    print(f"  Recall: {recall:.2f}")
+    print(f"  F1 Score: {f1:.2f}")
+    print("-" * 50)
+    return accuracy, precision, recall, f1
+
 
 def main():
-    # creating object of TwitterClient Class
-    api = TwitterClient()
-    # calling function to get tweets
-    que = "Farmers law"  # the query to be searched in twitter.
-    tweets = api.get_tweets(query=que, count=10)
-    print("----------------------------------------------------------------------------------------------------------")
-    print("                                    TextBlob sentiment analysis                                           ")
-    print("----------------------------------------------------------------------------------------------------------")
+    # Replace 'YOUR_BEARER_TOKEN' with your actual Bearer Token
+    BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAAItHxQEAAAAASO6XVfFvzDGYT6lddUXswedqSCo%3DsNS9nnfWUnGVx6YquMPVA7eg3wcYzfUWUOjgaSYPcFy7yh0rRM"
 
-    # picking positive tweets from tweets
-    ptweets = [tweet for tweet in tweets if tweet['sentiment'] == 'positive']
-    # percentage of positive tweets
-    print("Positive tweets percentage: {} %".format(100 * len(ptweets) / len(tweets)))
-    # picking negative tweets from tweets
-    ntweets = [tweet for tweet in tweets if tweet['sentiment'] == 'negative']
-    # percentage of negative tweets
-    print("Negative tweets percentage: {} %".format(100 * len(ntweets) / len(tweets)))
-    # percentage of neutral tweets
-    print("Neutral tweets percentage: {} % ".format(100 * (len(tweets) - (len(ntweets) + len(ptweets))) / len(tweets)))
+    api = TwitterClient(bearer_token=BEARER_TOKEN)
+    query = "What is the current political scenario in maharashtra"  # Example query
+    tweets = api.search_recent_tweets(query=query, max_results=10)
 
-    # printing first 5 positive tweets
-    print("\n\nPositive tweets:")
-    for tweet in ptweets[:2]:
-        print(tweet['text'])
+    if not tweets:
+        print("No tweets found or an error occurred.")
+        return
 
-    # printing first 5 negative tweets
-    print("\n\nNegative tweets:")
-    for tweet in ntweets[:2]:
-        print(tweet['text'])
+    # Simulated ground truth labels (for demonstration)
+    # Replace these with actual labels if available
+    ground_truth = ["positive", "negative", "neutral", "neutral", "positive",
+                    "negative", "positive", "neutral", "neutral", "negative"]
 
-    print("----------------------------------------------------------------------------------------------------------")
-    print("                                    Vader sentiment analysis                                              ")
-    print("----------------------------------------------------------------------------------------------------------")
-    tweets_vader = api.get_vader_tweets(query=que, count=10)
+    # Encode ground truth for scoring
+    label_encoder = LabelEncoder()
+    ground_truth_encoded = label_encoder.fit_transform(ground_truth)
 
-    ptweets_vader = [tweet for tweet in tweets_vader if tweet['sentiment'] == 'Positive']
+    # Analyze tweets with TextBlob, VADER, and RoBERTa
+    textblob_predictions = []
+    vader_predictions = []
+    roberta_predictions = []
 
-    print("Positive tweets percentage: {} %".format(100 * len(ptweets_vader) / len(tweets_vader)))
+    print("\nTweets and Sentiment Analysis Results:")
+    for i, tweet in enumerate(tweets, 1):
+        print(f"Tweet {i}: {tweet}")
 
-    ntweets_vader = [tweet for tweet in tweets_vader if tweet['sentiment'] == 'Negative']
+        # TextBlob Analysis
+        textblob_sentiment = api.textblob_sentiment(tweet)
+        textblob_predictions.append(textblob_sentiment)
+        print(f"  TextBlob Sentiment: {textblob_sentiment}")
 
-    print("Negative tweets percentage: {} %".format(100 * len(ntweets_vader) / len(tweets_vader)))
+        # VADER Analysis
+        vader_sentiment = api.vader_sentiment(tweet)
+        vader_predictions.append(vader_sentiment)
+        print(f"  VADER Sentiment: {vader_sentiment}")
 
-    print("Neutral tweets percentage: {} % ".format(
-        100 * (len(tweets_vader) - (len(ntweets_vader) + len(ptweets_vader))) / len(tweets_vader)))
+        # RoBERTa Analysis
+        roberta_sentiment = api.roberta_sentiment(tweet)
+        roberta_predictions.append(roberta_sentiment)
+        print(f"  RoBERTa Sentiment: {roberta_sentiment}")
+        print("-" * 80)
 
-    print("\n\nVader Positive tweets:")
-    for tweet in ptweets_vader[:2]:
-        print(tweet['text'])
+    # Encode predictions for scoring
+    textblob_encoded = label_encoder.transform(textblob_predictions)
+    vader_encoded = label_encoder.transform(vader_predictions)
+    roberta_encoded = label_encoder.transform(roberta_predictions)
 
-    # printing first 5 negative tweets
-    print("\n\nVader Negative tweets:")
-    for tweet in ntweets_vader[:2]:
-        print(tweet['text'])
+    # Calculate and display metrics for each model
+    calculate_metrics(ground_truth_encoded, textblob_encoded, "TextBlob")
+    calculate_metrics(ground_truth_encoded, vader_encoded, "VADER")
+    calculate_metrics(ground_truth_encoded, roberta_encoded, "RoBERTa")
 
-    print("----------------------------------------------------------------------------------------------------------")
-    print("                                Textblob sentiment analysis showcase                                      ")
-    print("----------------------------------------------------------------------------------------------------------")
-
-    try:
-        print(str(ptweets[0]))
-        print("\n")
-        api.textblob_sentiment(str(ptweets[0]))
-        print("\n")
-    except:
-        print("no positive tweets according to Textblob \n")
-
-    try:
-        print(str(ntweets[0]))
-        print("\n")
-        api.textblob_sentiment(str(ntweets[0]))
-        print("\n")
-    except:
-        print("no negative tweets according to Textblob \n")
-
-    print("----------------------------------------------------------------------------------------------------------")
-    print("                                Vader sentiment analysis showcase                                         ")
-    print("----------------------------------------------------------------------------------------------------------")
-
-    try:
-        print(str(ptweets_vader[0]))
-        print("\n")
-        api.vader_analysis(str(ptweets_vader[0]))
-
-    except:
-        print("no positive tweets according to Vader \n ")
-
-    try:
-        print(str(ntweets_vader[0]))
-        print("\n")
-        api.vader_analysis(str(ntweets_vader[0]))
-    except:
-        print("no negative tweets according to Vader \n")
 
 if __name__ == "__main__":
-    # calling main function
     main()
